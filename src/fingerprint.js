@@ -1,9 +1,16 @@
 import { clamp, hash32, lerp, mulberry32 } from "./rng.js";
 
-// A fingerprint is a list of brush strokes in unit space, where 1 is the
-// outer edge of the ring and time runs clockwise from twelve o'clock.
-// Stroke: { points: {x, y}[], tone: palette key, width: brush width in radii,
-//           alpha, bristles: hair count, dry: chance a hair lifts off the paper }
+/**
+ * A brush stroke in unit space: 1 is the outer edge of the ring and time runs
+ * clockwise from twelve o'clock.
+ * @typedef {object} Stroke
+ * @property {{x: number, y: number}[]} points
+ * @property {"paper"|"ink"|"mute"|"tomato"|"olive"|"gold"|"cream"|"soot"} tone palette key
+ * @property {number} width brush width in radii
+ * @property {number} alpha
+ * @property {number} bristles hair count
+ * @property {number} dry chance a hair lifts off the paper at any point
+ */
 
 const KIND_DRAMA = {
   prep: 0.15,
@@ -175,6 +182,7 @@ function innerStrokes(bend, rand) {
   return strokes;
 }
 
+/** @returns {{ seed: number, strokes: Stroke[] }} */
 export function buildFingerprint(recipe) {
   const seed = hash32(recipe.id);
   const rand = mulberry32(seed);
