@@ -1,16 +1,9 @@
 import { clamp, hash32, lerp, mulberry32 } from "./rng.js";
 
-const ROLE_WEIGHT = {
-  starch: 1.1,
-  protein: 1.4,
-  dairy: 0.9,
-  fat: 1.2,
-  acid: 0.8,
-  aromatic: 1,
-  spice: 1.6,
-  liquid: 0.7,
-  mineral: 0.4,
-};
+// A fingerprint is a list of brush strokes in unit space, where 1 is the
+// outer edge of the ring and time runs clockwise from twelve o'clock.
+// Stroke: { points: {x, y}[], tone: palette key, width: brush width in radii,
+//           alpha, bristles: hair count, dry: chance a hair lifts off the paper }
 
 const KIND_DRAMA = {
   prep: 0.15,
@@ -20,55 +13,28 @@ const KIND_DRAMA = {
   finish: 0.95,
 };
 
-function heatTone(palette, heatC) {
-  if (heatC >= 180) return palette.tomato;
-  if (heatC >= 120) return palette.gold;
-  if (heatC >= 90) return palette.olive;
-  return palette.cream;
-}
+const ROLE_TONE = {
+  protein: "tomato",
+  acid: "tomato",
+  starch: "gold",
+  fat: "gold",
+  dairy: "cream",
+  aromatic: "olive",
+  liquid: "olive",
+  spice: "soot",
+  mineral: "ink",
+};
 
-function roleColor(palette, role) {
-  if (role === "protein") return palette.tomato;
-  if (role === "spice") return palette.soot;
-  if (role === "dairy") return palette.cream;
-  if (role === "fat") return palette.gold;
-  if (role === "acid") return palette.tomato;
-  if (role === "aromatic") return palette.olive;
-  if (role === "liquid") return palette.olive;
-  if (role === "starch") return palette.gold;
-  return palette.ink;
-}
+const RING = { inner: 0.45, outer: 0.95 };
+const SIDE_RING = { inner: 0.36, outer: 0.5 };
+const BANDS = 7;
+const STEP = 0.012;
 
-function polar(angle, radius) {
-  return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
-}
-
-function fieldAt(x, y, wells, swirl0) {
-  let vx = -y * swirl0;
-  let vy = x * swirl0;
-  for (const well of wells) {
-    const dx = well.x - x;
-    const dy = well.y - y;
-    const d2 = dx * dx + dy * dy + 0.05;
-    vx += (dx * well.mass) / d2 - (dy * well.swirl) / d2;
-    vy += (dy * well.mass) / d2 + (dx * well.swirl) / d2;
-  }
-  return { vx, vy };
-}
-
-function integrateStroke(start, wells, swirl0, length, steps, rand) {
-  const points = [{ ...start }];
-  let x = start.x;
-  let y = start.y;
-  const step = length / steps;
-  for (let i = 0; i < steps; i += 1) {
-    const f = fieldAt(x, y, wells, swirl0);
-    const mag = Math.hypot(f.vx, f.vy) || 1;
-    x += (f.vx / mag) * step + (rand() - 0.5) * 0.008;
-    y += (f.vy / mag) * step + (rand() - 0.5) * 0.008;
-    points.push({ x, y });
-  }
-  return points;
+function sectorTone(step) {
+  if (step.kind === "finish" || step.kind === "simmer") return "tomato";
+  if (step.kind === "rest") return "mute";
+  if (step.kind === "cook") return step.heatC >= 150 ? "tomato" : "olive";
+  return "gold";
 }
 
 function dramaOf(recipe) {
@@ -79,111 +45,184 @@ function dramaOf(recipe) {
   return clamp(0.2 + overlap * 0.22 + lateHeat + simmer + richness * 0.2, 0, 1);
 }
 
+function polar(angle, radius) {
+  return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
+}
+
+function weightedPick(rand, items, weightOf) {
+  let g = rand() * items.reduce((n, item) => n + weightOf(item), 0);
+  for (const item of items) {
+    g -= weightOf(item);
+    if (g <= 0) return item;
+  }
+  return items.at(-1);
+}
+
+function fieldAt(x, y, wells, bend) {
+  const r = Math.hypot(x, y) || 1;
+  const a = Math.atan2(y, x);
+  const twist = bend.amp * Math.sin(bend.k1 * a + bend.phase + r * bend.k2) + bend.drift;
+  const tx = -y / r;
+  const ty = x / r;
+  let vx = tx * Math.cos(twist) - ty * Math.sin(twist);
+  let vy = tx * Math.sin(twist) + ty * Math.cos(twist);
+  for (const well of wells) {
+    const dx = well.x - x;
+    const dy = well.y - y;
+    const d2 = dx * dx + dy * dy + 0.02;
+    vx += (dx * well.mass) / d2 - (dy * well.swirl) / d2;
+    vy += (dy * well.mass) / d2 + (dx * well.swirl) / d2;
+  }
+  const m = Math.hypot(vx, vy) || 1;
+  return { vx: vx / m, vy: vy / m };
+}
+
+function integrate(start, wells, bend, length, rand) {
+  const points = [start];
+  let { x, y } = start;
+  for (let i = 0, n = Math.max(4, Math.round(length / STEP)); i < n; i += 1) {
+    const f = fieldAt(x, y, wells, bend);
+    x += f.vx * STEP + (rand() - 0.5) * 0.0006;
+    y += f.vy * STEP + (rand() - 0.5) * 0.0006;
+    const r = Math.hypot(x, y);
+    if (r > 1 || r < 0.3) break;
+    points.push({ x, y });
+  }
+  return points;
+}
+
+function sweepStrokes(recipe, sectors, wells, bend, drama, rand) {
+  const strokes = [];
+  const bandWeight = Array.from({ length: BANDS }, () => 0.35 + rand() * 0.65);
+  const bandIndex = Array.from({ length: BANDS }, (_, i) => i);
+  for (const sector of sectors) {
+    const span = sector.a1 - sector.a0;
+    const ring = sector.side ? SIDE_RING : RING;
+    const energy = 0.55 + KIND_DRAMA[sector.step.kind] * 0.6 + (sector.step.heatC >= 150 ? 0.2 : 0);
+    const count = Math.round(lerp(390, 730, drama) * (span / (Math.PI * 2)) * energy * (sector.side ? 0.6 : 1));
+    for (let i = 0; i < count; i += 1) {
+      const band = weightedPick(rand, bandIndex, (b) => bandWeight[b]);
+      const radius = lerp(ring.inner, ring.outer, (band + rand() * 0.9) / BANDS);
+      const angle = lerp(sector.a0, sector.a1, rand());
+      const ingredient = weightedPick(rand, recipe.ingredients, (item) => item.grams);
+      const tone = rand() < 0.62 ? sector.tone : ROLE_TONE[ingredient.role];
+      const length = lerp(0.6, 2.2, rand()) * radius * (0.6 + drama * 0.5);
+      const points = integrate(polar(angle, radius), wells, bend, length, rand);
+      if (points.length < 4) continue;
+      const broad = rand() < 0.18;
+      strokes.push({
+        points,
+        tone,
+        width: broad ? lerp(0.05, 0.085, rand()) : lerp(0.012, 0.05, rand()),
+        alpha: tone === "cream" ? 0.55 : broad ? lerp(0.22, 0.4, rand()) : lerp(0.32, 0.7, rand()),
+        bristles: broad ? 10 + Math.floor(rand() * 6) : 4 + Math.floor(rand() * 7),
+        dry: 0.3 + rand() * 0.2,
+      });
+    }
+  }
+  return strokes;
+}
+
+function burstStrokes(well, drama, spice, rand) {
+  const strokes = [];
+  const rays = Math.round((30 + drama * 40 + spice * 25) * well.strength + 50);
+  for (let i = 0; i < rays; i += 1) {
+    const angle = rand() * Math.PI * 2;
+    const length = Math.pow(rand(), 3) * 0.16 * (0.5 + well.strength) + 0.02;
+    const gap = rand() * 0.02;
+    const points = [];
+    for (let k = 0; k <= 6; k += 1) {
+      const d = gap + (length * k) / 6;
+      const bent = angle + d * 24 * well.swirl;
+      points.push({ x: well.x + Math.cos(bent) * d, y: well.y + Math.sin(bent) * d });
+    }
+    strokes.push({
+      points,
+      tone: "soot",
+      width: 0.005 + rand() * 0.012,
+      alpha: 0.35 + rand() * 0.45,
+      bristles: 2 + Math.floor(rand() * 2),
+      dry: 0.35,
+    });
+  }
+  const blots = Math.round(5 + well.strength * 9 + rand() * 4);
+  for (let i = 0; i < blots; i += 1) {
+    const angle = rand() * Math.PI * 2;
+    const d = Math.pow(rand(), 1.6) * 0.07 * (0.5 + well.strength);
+    const c = { x: well.x + Math.cos(angle) * d, y: well.y + Math.sin(angle) * d };
+    const dir = rand() * Math.PI * 2;
+    const l = 0.01 + rand() * 0.04;
+    strokes.push({
+      points: [c, { x: c.x + Math.cos(dir) * l * 0.5, y: c.y + Math.sin(dir) * l * 0.5 }, { x: c.x + Math.cos(dir) * l, y: c.y + Math.sin(dir) * l }],
+      tone: "soot",
+      width: 0.012 + Math.pow(rand(), 2) * 0.04,
+      alpha: 0.55 + rand() * 0.4,
+      bristles: 7,
+      dry: 0.15,
+    });
+  }
+  return strokes;
+}
+
+function innerStrokes(bend, rand) {
+  const strokes = [];
+  for (let i = 0, n = 6 + Math.floor(rand() * 6); i < n; i += 1) {
+    const radius = 0.08 + rand() * 0.3;
+    const points = integrate(polar(rand() * Math.PI * 2, radius), [], bend, 0.2 + rand() * 0.5, rand);
+    if (points.length < 4) continue;
+    strokes.push({ points, tone: "mute", width: 0.012, alpha: 0.18 + rand() * 0.15, bristles: 3, dry: 0.4 });
+  }
+  return strokes;
+}
+
 export function buildFingerprint(recipe) {
   const seed = hash32(recipe.id);
   const rand = mulberry32(seed);
   const drama = dramaOf(recipe);
   const total = recipe.totalSeconds;
-  const rings = [];
+  const angleAt = (seconds) => -Math.PI / 2 + (seconds / total) * Math.PI * 2;
+
+  const sectors = [];
   const wells = [];
   let cursor = 0;
-  const ringCount = recipe.steps.length;
-
-  recipe.steps.forEach((step, index) => {
-    const a0 = -Math.PI / 2 + (cursor / total) * Math.PI * 2;
-    const a1 = -Math.PI / 2 + ((cursor + step.durationSec) / total) * Math.PI * 2;
-    const outer = 0.92 - index * (0.5 / ringCount);
-    const inner = outer - 0.5 / ringCount - 0.02;
-    rings.push({
-      stepId: step.id,
-      index,
-      a0,
-      a1,
-      r0: inner,
-      r1: outer,
-      color: heatTone(recipe.palette, step.heatC),
-      heatC: step.heatC,
-      kind: step.kind,
-    });
-
-    const mid = (a0 + a1) / 2;
-    const mass = KIND_DRAMA[step.kind] * (0.04 + drama * 0.08);
-    if (step.kind === "finish" || step.kind === "simmer" || step.heatC >= 180) {
-      const p = polar(mid, (inner + outer) / 2);
-      wells.push({
-        x: p.x,
-        y: p.y,
-        mass,
-        swirl: (rand() > 0.5 ? 1 : -1) * (0.02 + drama * 0.05),
-      });
-    }
-
+  for (const step of recipe.steps) {
+    const a0 = angleAt(cursor);
+    const a1 = angleAt(cursor + step.durationSec);
+    sectors.push({ step, a0, a1, tone: sectorTone(step) });
     for (const timer of step.timers ?? []) {
-      const t0 = -Math.PI / 2 + ((cursor + timer.offsetSec) / total) * Math.PI * 2;
-      const t1 = -Math.PI / 2 + ((cursor + timer.offsetSec + timer.durationSec) / total) * Math.PI * 2;
-      rings.push({
-        stepId: timer.id,
-        index,
-        a0: t0,
-        a1: t1,
-        r0: inner - 0.06,
-        r1: inner - 0.02,
-        color: recipe.palette.olive,
-        heatC: step.heatC,
-        kind: "cook",
+      sectors.push({
+        step,
+        a0: angleAt(cursor + timer.offsetSec),
+        a1: angleAt(cursor + timer.offsetSec + timer.durationSec),
+        tone: "olive",
         side: true,
       });
     }
-
-    cursor += step.durationSec;
-  });
-
-  const swirl0 = 0.12 + drama * 0.2;
-  const strokes = [];
-  const ingredientMass = recipe.ingredients.reduce((n, item) => n + item.grams, 0);
-
-  for (const ring of rings.filter((item) => !item.side)) {
-    const step = recipe.steps[ring.index];
-    const span = Math.max(0.2, ring.a1 - ring.a0);
-    const density = Math.round(lerp(28, 90, drama) * (0.7 + span));
-    for (let i = 0; i < density; i += 1) {
-      const t = rand();
-      const angle = lerp(ring.a0, ring.a1, t);
-      const radius = lerp(ring.r0, ring.r1, rand());
-      const start = polar(angle, radius);
-      const ing = recipe.ingredients[Math.floor(rand() * recipe.ingredients.length)];
-      const weight = ROLE_WEIGHT[ing.role] ?? 1;
-      const length = lerp(0.08, 0.42, clamp(ing.grams / 400, 0, 1)) * weight * (0.7 + drama);
-      const points = integrateStroke(start, wells, swirl0, length, 10 + Math.floor(rand() * 8), rand);
-      strokes.push({
-        points,
-        color: rand() > 0.35 ? roleColor(recipe.palette, ing.role) : ring.color,
-        width: lerp(0.004, 0.018, weight * (ing.role === "spice" ? 0.35 : 0.8)),
-        spray: ing.role === "spice" ? 18 : ing.role === "fat" ? 7 : 11,
-        alpha: lerp(0.18, 0.55, weight * 0.5 + drama * 0.3),
-      });
-    }
-  }
-
-  const speckle = Math.round(80 + recipe.ingredients.filter((item) => item.role === "spice").length * 140);
-  for (let i = 0; i < speckle; i += 1) {
-    const angle = rand() * Math.PI * 2;
-    const radius = 0.2 + rand() * 0.7;
-    strokes.push({
-      points: [polar(angle, radius), polar(angle + 0.02, radius + 0.01)],
-      color: recipe.palette.soot,
-      width: 0.003,
-      spray: 4,
-      alpha: 0.22,
+    const strength = clamp(KIND_DRAMA[step.kind] + (step.heatC >= 180 ? 0.3 : 0), 0.2, 1);
+    wells.push({
+      ...polar(a1 + (rand() - 0.5) * 0.08, lerp(0.55, 0.85, rand())),
+      mass: strength * (0.006 + drama * 0.012),
+      swirl: (rand() > 0.5 ? 1 : -1) * strength * (0.003 + drama * 0.008),
+      strength,
     });
+    cursor += step.durationSec;
   }
+
+  const bend = {
+    amp: 0.03 + drama * 0.05,
+    k1: 2 + Math.floor(rand() * 3),
+    k2: 3 + rand() * 4,
+    phase: rand() * Math.PI * 2,
+    drift: (rand() - 0.5) * 0.04,
+  };
+  const spice = recipe.ingredients.filter((item) => item.role === "spice").length;
 
   return {
     seed,
-    drama,
-    rings,
-    wells,
-    strokes,
-    ingredientMass,
+    strokes: [
+      ...sweepStrokes(recipe, sectors, wells, bend, drama, rand),
+      ...wells.flatMap((well) => burstStrokes(well, drama, spice, rand)),
+      ...innerStrokes(bend, rand),
+    ],
   };
 }

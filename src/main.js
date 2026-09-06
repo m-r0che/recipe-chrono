@@ -118,7 +118,7 @@ function frame(ts) {
     state.session = tickSession(state.session, state.recipe, dt);
     syncChrome();
   }
-  paintClock(ctx, state.recipe, state.fingerprint, state.session, state.mode, ts);
+  paintClock(ctx, state.recipe, state.fingerprint, state.session, state.mode);
   requestAnimationFrame(frame);
 }
 
