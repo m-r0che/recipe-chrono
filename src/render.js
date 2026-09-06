@@ -197,11 +197,23 @@ function paintFingerprint(ctx, recipe, fingerprint, mode, ghost = false) {
   if (mode === "poster") drawCaption(ctx, recipe, view);
 }
 
+// Poster layers paint at 2x and downsample so pigment edges go soft instead
+// of aliased. Cook layers stay at 1x: they are dimmed anyway and there are two.
+const SUPERSAMPLE = { poster: 2, cook: 1 };
+
 function paintLayer(recipe, fingerprint, mode, w, h, ghost) {
+  const ss = SUPERSAMPLE[mode];
+  const big = document.createElement("canvas");
+  big.width = w * ss;
+  big.height = h * ss;
+  paintFingerprint(big.getContext("2d"), recipe, fingerprint, mode, ghost);
+  if (ss === 1) return big;
   const canvas = document.createElement("canvas");
   canvas.width = w;
   canvas.height = h;
-  paintFingerprint(canvas.getContext("2d"), recipe, fingerprint, mode, ghost);
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(big, 0, 0, w, h);
   return canvas;
 }
 
@@ -265,11 +277,7 @@ export function paintClock(ctx, recipe, fingerprint, session, mode) {
 }
 
 export function posterDataUrl(recipe, fingerprint) {
-  const canvas = document.createElement("canvas");
-  canvas.width = 2400;
-  canvas.height = 3200;
-  paintFingerprint(canvas.getContext("2d"), recipe, fingerprint, "poster");
-  return canvas.toDataURL("image/png");
+  return paintLayer(recipe, fingerprint, "poster", 2400, 3200, false).toDataURL("image/png");
 }
 
 export function exportPosterPng(recipe, fingerprint) {
