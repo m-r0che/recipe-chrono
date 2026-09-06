@@ -15,18 +15,25 @@ export function listenForCookCommands(onCommand) {
     else if (/\b(repeat|again|back)\b/.test(said)) onCommand("repeat");
   };
 
-  rec.onerror = () => {};
+  rec.onerror = (event) => {
+    if (event.error === "not-allowed" || event.error === "aborted") return;
+  };
   rec.onend = () => {
     try {
       rec.start();
-    } catch {
+    } catch (err) {
+      if (err.name === "InvalidStateError" || err.name === "NotAllowedError") return;
+      throw err;
     }
   };
 
   try {
     rec.start();
-  } catch {
-    return { stop() {}, available: false };
+  } catch (err) {
+    if (err.name === "InvalidStateError" || err.name === "NotAllowedError") {
+      return { stop() {}, available: false };
+    }
+    throw err;
   }
 
   return {
