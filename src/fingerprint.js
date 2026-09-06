@@ -1,15 +1,37 @@
 import { clamp, hash32, lerp, mulberry32 } from "./rng.js";
 
 /**
- * A brush stroke in unit space: 1 is the outer edge of the ring and time runs
- * clockwise from twelve o'clock.
- * @typedef {object} Stroke
+ * Marks live in unit space: 1 is the outer edge of the ring and time runs
+ * clockwise from twelve o'clock. `kind` picks the brush in render.js.
+ * @typedef {"paper"|"ink"|"mute"|"tomato"|"olive"|"gold"|"cream"|"soot"} Tone
+ *
+ * @typedef {object} Sweep a wobbly dry-brush polyline
+ * @property {"sweep"} kind
  * @property {{x: number, y: number}[]} points
- * @property {"paper"|"ink"|"mute"|"tomato"|"olive"|"gold"|"cream"|"soot"} tone palette key
+ * @property {Tone} tone
  * @property {number} width brush width in radii
  * @property {number} alpha
  * @property {number} bristles hair count
  * @property {number} dry chance a hair lifts off the paper at any point
+ * @property {number} weight 0 ghost to 1 full ink; the inside/outside mask
+ *
+ * @typedef {object} Filing a short dash aligned to the field near the climax pole
+ * @property {"filing"} kind
+ * @property {number} x
+ * @property {number} y
+ * @property {number} angle
+ * @property {number} length in radii
+ * @property {number} alpha
+ *
+ * @typedef {object} Wash a soft translucent blob laid under the contour ink
+ * @property {"wash"} kind
+ * @property {number} x
+ * @property {number} y
+ * @property {number} r radius in radii
+ * @property {Tone} tone
+ * @property {number} alpha
+ *
+ * @typedef {Sweep | Filing | Wash} Stroke
  */
 
 const KIND_DRAMA = {
@@ -98,6 +120,10 @@ function integrate(start, wells, bend, length, bounds, rand) {
   return points;
 }
 
+function energyOf(step) {
+  return clamp(KIND_DRAMA[step.kind] + (step.heatC >= 150 ? 0.3 : 0), 0.25, 1);
+}
+
 function sweepStrokes(recipe, sectors, wells, bend, drama, rand) {
   const strokes = [];
   const bandWeight = Array.from({ length: BANDS }, () => 0.35 + rand() * 0.65);
@@ -105,8 +131,8 @@ function sweepStrokes(recipe, sectors, wells, bend, drama, rand) {
   for (const sector of sectors) {
     const span = sector.a1 - sector.a0;
     const ring = sector.side ? SIDE_RING : RING;
-    const energy = 0.55 + KIND_DRAMA[sector.step.kind] * 0.6 + (sector.step.heatC >= 150 ? 0.2 : 0);
-    const count = Math.round(lerp(390, 730, drama) * (span / (Math.PI * 2)) * energy * (sector.side ? 0.6 : 1));
+    const energy = energyOf(sector.step);
+    const count = Math.round(lerp(390, 730, drama) * (span / (Math.PI * 2)) * (0.55 + energy * 0.65) * (sector.side ? 0.6 : 1));
     for (let i = 0; i < count; i += 1) {
       const band = weightedPick(rand, bandIndex, (b) => bandWeight[b]);
       const radius = lerp(ring.inner, ring.outer, (band + rand() * 0.9) / BANDS);
@@ -118,14 +144,33 @@ function sweepStrokes(recipe, sectors, wells, bend, drama, rand) {
       if (points.length < 4) continue;
       const broad = rand() < 0.18;
       strokes.push({
+        kind: "sweep",
         points,
         tone,
         width: broad ? lerp(0.05, 0.085, rand()) : lerp(0.012, 0.05, rand()),
         alpha: tone === "cream" ? 0.55 : broad ? lerp(0.22, 0.4, rand()) : lerp(0.32, 0.7, rand()),
-        bristles: broad ? 10 + Math.floor(rand() * 6) : 4 + Math.floor(rand() * 7),
+        bristles: broad ? 8 + Math.floor(rand() * 5) : 3 + Math.floor(rand() * 6),
         dry: 0.3 + rand() * 0.2,
+        weight: energy,
       });
     }
+  }
+  return strokes;
+}
+
+function washStrokes(well, rand) {
+  const strokes = [];
+  for (let i = 0, n = 2 + Math.floor(rand() * 3); i < n; i += 1) {
+    const angle = rand() * Math.PI * 2;
+    const d = rand() * 0.06;
+    strokes.push({
+      kind: "wash",
+      x: well.x + Math.cos(angle) * d,
+      y: well.y + Math.sin(angle) * d,
+      r: (0.05 + rand() * 0.08) * (0.5 + well.strength),
+      tone: well.tone,
+      alpha: 0.05 + rand() * 0.05,
+    });
   }
   return strokes;
 }
@@ -144,12 +189,14 @@ function burstStrokes(well, drama, spice, rand) {
       points.push({ x: well.x + Math.cos(bent) * d, y: well.y + Math.sin(bent) * d });
     }
     strokes.push({
+      kind: "sweep",
       points,
       tone: "soot",
       width: 0.005 + rand() * 0.012,
       alpha: 0.35 + rand() * 0.45,
       bristles: 2 + Math.floor(rand() * 2),
       dry: 0.35,
+      weight: 1,
     });
   }
   const blots = Math.round(5 + well.strength * 9 + rand() * 4);
@@ -160,12 +207,38 @@ function burstStrokes(well, drama, spice, rand) {
     const dir = rand() * Math.PI * 2;
     const l = 0.01 + rand() * 0.04;
     strokes.push({
+      kind: "sweep",
       points: [c, { x: c.x + Math.cos(dir) * l * 0.5, y: c.y + Math.sin(dir) * l * 0.5 }, { x: c.x + Math.cos(dir) * l, y: c.y + Math.sin(dir) * l }],
       tone: "soot",
       width: 0.012 + Math.pow(rand(), 2) * 0.04,
       alpha: 0.55 + rand() * 0.4,
       bristles: 7,
       dry: 0.15,
+      weight: 1,
+    });
+  }
+  return strokes;
+}
+
+// Iron filings around the climax pole. The pole's pull is exaggerated so the
+// dashes visibly bend toward it instead of just following the ring.
+function filingStrokes(pole, bend, drama, rand) {
+  const strokes = [];
+  const magnet = [{ ...pole, mass: pole.mass * 8, swirl: pole.swirl * 3 }];
+  for (let i = 0, n = Math.round(260 + drama * 260); i < n; i += 1) {
+    const d = 0.04 + Math.pow(rand(), 0.7) * 0.42;
+    const angle = rand() * Math.PI * 2;
+    const x = pole.x + Math.cos(angle) * d;
+    const y = pole.y + Math.sin(angle) * d;
+    if (Math.hypot(x, y) > 1.14) continue;
+    const f = fieldAt(x, y, magnet, bend);
+    strokes.push({
+      kind: "filing",
+      x,
+      y,
+      angle: Math.atan2(f.vy, f.vx),
+      length: 0.014 + rand() * 0.03,
+      alpha: (0.2 + rand() * 0.45) * (1 - d / 0.5),
     });
   }
   return strokes;
@@ -177,7 +250,7 @@ function innerStrokes(bend, rand) {
     const radius = 0.08 + rand() * 0.3;
     const points = integrate(polar(rand() * Math.PI * 2, radius), [], bend, 0.2 + rand() * 0.5, { inner: 0.02, outer: 0.42 }, rand);
     if (points.length < 4) continue;
-    strokes.push({ points, tone: "mute", width: 0.012, alpha: 0.18 + rand() * 0.15, bristles: 3, dry: 0.4 });
+    strokes.push({ kind: "sweep", points, tone: "mute", width: 0.012, alpha: 0.18 + rand() * 0.15, bristles: 3, dry: 0.4, weight: 0.2 });
   }
   return strokes;
 }
@@ -212,9 +285,11 @@ export function buildFingerprint(recipe) {
       mass: strength * (0.006 + drama * 0.012),
       swirl: (rand() > 0.5 ? 1 : -1) * strength * (0.003 + drama * 0.008),
       strength,
+      tone: sectorTone(step),
     });
     cursor += step.durationSec;
   }
+  const pole = wells.reduce((best, well) => (well.strength >= best.strength ? well : best));
 
   const bend = {
     amp: 0.03 + drama * 0.05,
@@ -229,8 +304,10 @@ export function buildFingerprint(recipe) {
     seed,
     strokes: [
       ...sweepStrokes(recipe, sectors, wells, bend, drama, rand),
-      ...wells.flatMap((well) => burstStrokes(well, drama, spice, rand)),
       ...innerStrokes(bend, rand),
+      ...wells.flatMap((well) => washStrokes(well, rand)),
+      ...filingStrokes(pole, bend, drama, rand),
+      ...wells.flatMap((well) => burstStrokes(well, drama, spice, rand)),
     ],
   };
 }

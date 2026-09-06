@@ -1,8 +1,24 @@
-import { clamp, mulberry32 } from "./rng.js";
+import { clamp, lerp, mulberry32 } from "./rng.js";
 import { clockProgress } from "./session.js";
 
 const POSTER = { cy: 0.47, scale: 0.36, dim: 1 };
-const COOK = { cy: 0.5, scale: 0.3, dim: 0.45 };
+const COOK = { cy: 0.5, scale: 0.3, dim: 0.6 };
+const GHOST_DIM = 0.28;
+
+// Width envelope for a tapered hair, sampled once per chunk so canvas can
+// keep one lineWidth per path.
+const CHUNKS = [
+  [0, 0.1],
+  [0.1, 0.25],
+  [0.25, 0.75],
+  [0.75, 0.9],
+  [0.9, 1],
+];
+
+function rgba(hex, alpha) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+}
 
 // On dark paper charcoal vanishes, so cook mode lifts the dark tones to a warm grey.
 function inkFor(palette, mode) {
@@ -10,119 +26,219 @@ function inkFor(palette, mode) {
   return { ...palette, soot: palette.mute, ink: palette.mute };
 }
 
+function resample(points, spacing) {
+  const out = [points[0]];
+  let carry = 0;
+  for (let i = 1; i < points.length; i += 1) {
+    const a = points[i - 1];
+    const b = points[i];
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    let d = spacing - carry;
+    while (d <= len) {
+      out.push({ x: lerp(a.x, b.x, d / len), y: lerp(a.y, b.y, d / len) });
+      d += spacing;
+    }
+    carry = len - (d - spacing);
+  }
+  if (out.length < 2) out.push(points.at(-1));
+  return out;
+}
+
+function taper(t) {
+  return clamp(Math.min(t / 0.15, (1 - t) / 0.25), 0, 1);
+}
+
+function hairPath(ctx, pts, view, offset, wobble, amp, w, dry, rand, t0, t1) {
+  const last = pts.length - 1;
+  let pen = false;
+  for (let i = Math.floor(t0 * last); i <= Math.ceil(t1 * last); i += 1) {
+    const t = i / last;
+    if (rand() < dry * (1.2 - taper(t) * 0.7)) {
+      pen = false;
+      continue;
+    }
+    const prev = pts[Math.max(0, i - 1)];
+    const next = pts[Math.min(last, i + 1)];
+    const len = Math.hypot(next.x - prev.x, next.y - prev.y) || 1;
+    const nx = -(next.y - prev.y) / len;
+    const ny = (next.x - prev.x) / len;
+    const sway =
+      Math.sin(t * wobble[0] + wobble[1]) * 0.6 + Math.sin(t * wobble[2] + wobble[3]) * 0.3 + (rand() - 0.5) * 0.2;
+    const o = (offset * (0.3 + 0.7 * taper(t)) + sway * amp) * w;
+    const px = view.cx + pts[i].x * view.scale + nx * o;
+    const py = view.cy + pts[i].y * view.scale + ny * o;
+    if (pen) ctx.lineTo(px, py);
+    else ctx.moveTo(px, py);
+    pen = true;
+  }
+}
+
+function drawSweep(ctx, s, view, rand, ink) {
+  const weight = view.weight ?? s.weight;
+  const w = s.width * view.scale * (0.7 + 0.3 * weight);
+  const alpha = s.alpha * view.dim * (0.5 + 0.5 * weight);
+  const pts = resample(s.points, Math.max(1.5, view.scale * 0.006) / view.scale);
+  const hairs = s.bristles;
+  ctx.strokeStyle = ink[s.tone];
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  for (let k = 0; k <= hairs; k += 1) {
+    const grain = k === hairs;
+    const offset = hairs === 1 ? 0 : (k % hairs) / (hairs - 1) - 0.5;
+    const wobble = [3 + rand() * 6, rand() * Math.PI * 2, 9 + rand() * 12, rand() * Math.PI * 2];
+    const amp = grain ? 0.16 : 0.05;
+    const base = grain ? Math.max(0.5, (w / (hairs * 1.15)) * 0.4) : Math.max(0.6, (w / (hairs * 1.15)) * (0.55 + rand() * 0.9));
+    ctx.globalAlpha = grain ? alpha * (0.55 - 0.3 * weight) : alpha * (0.5 + rand() * 0.5);
+    for (const [t0, t1] of CHUNKS) {
+      ctx.lineWidth = base * (0.35 + 0.65 * Math.pow(taper((t0 + t1) / 2), 0.7));
+      ctx.beginPath();
+      hairPath(ctx, pts, view, offset, wobble, amp, w, grain ? s.dry * 0.5 : s.dry, rand, t0, t1);
+      ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawFiling(ctx, s, view, rand, ink) {
+  const l = s.length * view.scale;
+  const x = view.cx + s.x * view.scale;
+  const y = view.cy + s.y * view.scale;
+  ctx.strokeStyle = ink.soot;
+  ctx.lineCap = "round";
+  ctx.lineWidth = Math.max(0.7, view.scale * 0.0035) * (0.7 + rand() * 0.6);
+  ctx.globalAlpha = s.alpha * view.dim * (view.weight === 0 ? 0.35 : 1);
+  ctx.beginPath();
+  ctx.moveTo(x - (Math.cos(s.angle) * l) / 2, y - (Math.sin(s.angle) * l) / 2);
+  ctx.lineTo(x + (Math.cos(s.angle) * l) / 2, y + (Math.sin(s.angle) * l) / 2);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+function drawWash(ctx, s, view, rand, ink) {
+  const x = view.cx + s.x * view.scale;
+  const y = view.cy + s.y * view.scale;
+  const r = s.r * view.scale;
+  const fill = ctx.createRadialGradient(x, y, 0, x, y, r);
+  fill.addColorStop(0, rgba(ink[s.tone], s.alpha * view.dim));
+  fill.addColorStop(0.7, rgba(ink[s.tone], s.alpha * view.dim * 0.6));
+  fill.addColorStop(1, rgba(ink[s.tone], 0));
+  ctx.fillStyle = fill;
+  ctx.beginPath();
+  ctx.ellipse(x, y, r * (0.8 + rand() * 0.4), r * (0.8 + rand() * 0.4), rand() * Math.PI, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// The brush allowlist. A stroke draws with the brush its kind names and nothing else.
+const BRUSH = { sweep: drawSweep, filing: drawFiling, wash: drawWash };
+
 function drawPaper(ctx, w, h, palette, rand, mode) {
   ctx.fillStyle = mode === "cook" ? palette.soot : palette.paper;
   ctx.fillRect(0, 0, w, h);
-  ctx.globalAlpha = 0.07;
-  for (let i = 0; i < 2600; i += 1) {
+  ctx.globalAlpha = 0.045;
+  for (let i = 0, n = Math.round((w * h) / 300); i < n; i += 1) {
     ctx.fillStyle = rand() > 0.5 ? palette.ink : palette.cream;
     ctx.fillRect(rand() * w, rand() * h, 1.2, 1.2);
   }
   ctx.globalAlpha = 1;
 }
 
-function brushStroke(ctx, stroke, cx, cy, scale, rand, ink, dim) {
-  const pts = stroke.points;
-  const hairs = stroke.bristles;
-  const w = stroke.width * scale;
-  ctx.strokeStyle = ink[stroke.tone];
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  for (let k = 0; k < hairs; k += 1) {
-    const offset = hairs === 1 ? 0 : k / (hairs - 1) - 0.5;
-    const phase = rand() * Math.PI * 2;
-    const wobble = 2 + rand() * 4;
-    ctx.lineWidth = Math.max(0.6, (w / (hairs * 1.15)) * (0.55 + rand() * 0.9));
-    ctx.globalAlpha = stroke.alpha * dim * (0.5 + rand() * 0.5);
-    ctx.beginPath();
-    let pen = false;
-    for (let i = 0; i < pts.length; i += 1) {
-      const t = i / (pts.length - 1);
-      const body = clamp(Math.min(t / 0.18, (1 - t) / 0.3), 0, 1);
-      if (rand() < stroke.dry * (1.2 - body * 0.7)) {
-        pen = false;
-        continue;
-      }
-      const prev = pts[Math.max(0, i - 1)];
-      const next = pts[Math.min(pts.length - 1, i + 1)];
-      const len = Math.hypot(next.x - prev.x, next.y - prev.y) || 1;
-      const nx = -(next.y - prev.y) / len;
-      const ny = (next.x - prev.x) / len;
-      const o = (offset * (0.3 + 0.7 * body) + Math.sin(t * wobble * Math.PI + phase) * 0.05) * w;
-      const px = cx + pts[i].x * scale + nx * o;
-      const py = cy + pts[i].y * scale + ny * o;
-      if (pen) ctx.lineTo(px, py);
-      else ctx.moveTo(px, py);
-      pen = true;
-    }
-    ctx.stroke();
-  }
-  ctx.globalAlpha = 1;
-}
-
-function drawCaption(ctx, recipe, cx, cy, scale) {
+function drawCaption(ctx, recipe, view) {
   ctx.fillStyle = recipe.palette.ink;
   ctx.globalAlpha = 0.8;
   ctx.textAlign = "center";
-  ctx.font = `400 ${Math.max(11, scale * 0.045)}px "Source Serif 4", Georgia, serif`;
-  ctx.fillText(recipe.name.toUpperCase().split("").join(" "), cx, cy + scale * 1.22);
+  ctx.font = `400 ${Math.max(11, view.scale * 0.045)}px "Source Serif 4", Georgia, serif`;
+  ctx.fillText(recipe.name.toUpperCase().split("").join(" "), view.cx, view.cy + view.scale * 1.22);
   ctx.globalAlpha = 1;
 }
 
-function paintFingerprint(ctx, recipe, fingerprint, mode) {
-  const { width: w, height: h } = ctx.canvas;
+function viewFor(canvas, mode, ghost) {
   const layout = mode === "poster" ? POSTER : COOK;
-  const rand = mulberry32(fingerprint.seed ^ 0x9e3779b9);
-  const ink = inkFor(recipe.palette, mode);
-  const cx = w / 2;
-  const cy = h * layout.cy;
-  const scale = Math.min(w, h) * layout.scale;
-  drawPaper(ctx, w, h, recipe.palette, rand, mode);
-  for (const stroke of fingerprint.strokes) {
-    brushStroke(ctx, stroke, cx, cy, scale, rand, ink, layout.dim);
-  }
-  if (mode === "poster") drawCaption(ctx, recipe, cx, cy, scale);
+  return {
+    cx: canvas.width / 2,
+    cy: canvas.height * layout.cy,
+    scale: Math.min(canvas.width, canvas.height) * layout.scale,
+    dim: ghost ? GHOST_DIM : layout.dim,
+    weight: ghost ? 0 : undefined,
+  };
 }
 
-function drawCookFace(ctx, recipe, session) {
+function paintFingerprint(ctx, recipe, fingerprint, mode, ghost = false) {
   const { width: w, height: h } = ctx.canvas;
-  const cx = w / 2;
-  const cy = h * COOK.cy;
-  const scale = Math.min(w, h) * COOK.scale;
-  const shade = ctx.createRadialGradient(cx, cy, scale * 0.1, cx, cy, scale * 0.5);
+  const rand = mulberry32(fingerprint.seed ^ 0x9e3779b9);
+  const ink = inkFor(recipe.palette, mode);
+  const view = viewFor(ctx.canvas, mode, ghost);
+  drawPaper(ctx, w, h, recipe.palette, rand, mode);
+  for (const stroke of fingerprint.strokes) {
+    BRUSH[stroke.kind](ctx, stroke, view, rand, ink);
+  }
+  if (mode === "poster") drawCaption(ctx, recipe, view);
+}
+
+function paintLayer(recipe, fingerprint, mode, w, h, ghost) {
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  paintFingerprint(canvas.getContext("2d"), recipe, fingerprint, mode, ghost);
+  return canvas;
+}
+
+// A hand-drawn clock: a gold rim sweep from twelve to now and a radial hand at
+// now, reseeded every frame so the wobble holds still.
+function drawProgressSweep(ctx, recipe, fingerprint, view, progress) {
+  const rand = mulberry32(fingerprint.seed);
+  const now = progress * Math.PI * 2 - Math.PI / 2;
+  const gold = { kind: "sweep", tone: "gold", alpha: 1, dry: 0.12, weight: 1 };
+  const radial = (angle, r0, r1) => {
+    const points = [];
+    for (let r = r0; r <= r1; r += 0.01) points.push({ x: Math.cos(angle) * r, y: Math.sin(angle) * r });
+    return points;
+  };
+  drawSweep(ctx, { ...gold, points: radial(-Math.PI / 2, 0.9, 1.05), width: 0.02, bristles: 3 }, { ...view, dim: 1 }, rand, recipe.palette);
+  drawSweep(ctx, { ...gold, points: radial(now, 0.46, 1.03), width: 0.03, bristles: 4 }, { ...view, dim: 1 }, rand, recipe.palette);
+  const rim = [];
+  for (let a = -Math.PI / 2; a <= now; a += 0.02) {
+    rim.push({ x: Math.cos(a) * 1.02, y: Math.sin(a) * 1.02 });
+  }
+  if (rim.length < 2) return;
+  drawSweep(ctx, { ...gold, points: rim, width: 0.034, bristles: 4 }, { ...view, dim: 1 }, rand, recipe.palette);
+}
+
+function drawCookFace(ctx, recipe, fingerprint, session, view) {
+  const shade = ctx.createRadialGradient(view.cx, view.cy, view.scale * 0.1, view.cx, view.cy, view.scale * 0.5);
   shade.addColorStop(0, "rgba(16,12,8,0.85)");
   shade.addColorStop(1, "rgba(16,12,8,0)");
   ctx.fillStyle = shade;
-  ctx.fillRect(cx - scale * 0.5, cy - scale * 0.5, scale, scale);
-
-  const progress = clockProgress(recipe, session);
-  ctx.beginPath();
-  ctx.arc(cx, cy, 0.98 * scale, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
-  ctx.strokeStyle = recipe.palette.gold;
-  ctx.lineCap = "round";
-  ctx.lineWidth = Math.max(3, scale * 0.014);
-  ctx.shadowColor = recipe.palette.gold;
-  ctx.shadowBlur = 14;
-  ctx.stroke();
-  ctx.shadowBlur = 0;
+  ctx.fillRect(view.cx - view.scale * 0.5, view.cy - view.scale * 0.5, view.scale, view.scale);
+  drawProgressSweep(ctx, recipe, fingerprint, view, clockProgress(recipe, session));
 }
 
-// The painting costs tens of milliseconds, so it is painted once per
-// recipe, mode, and canvas size and blitted under the per-frame cook face.
-let painted = { key: "", canvas: null };
+// Painting costs tens of milliseconds, so each layer is painted once per
+// recipe, mode, and canvas size. Cook mode keeps a ghost and a full layer and
+// reveals the full one inside the elapsed wedge.
+let painted = { key: "", layers: [] };
 
 export function paintClock(ctx, recipe, fingerprint, session, mode) {
   const { width: w, height: h } = ctx.canvas;
   const key = `${recipe.id}|${mode}|${w}x${h}`;
   if (painted.key !== key) {
-    const canvas = document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
-    paintFingerprint(canvas.getContext("2d"), recipe, fingerprint, mode);
-    painted = { key, canvas };
+    const layers = [paintLayer(recipe, fingerprint, mode, w, h, mode === "cook")];
+    if (mode === "cook") layers.push(paintLayer(recipe, fingerprint, mode, w, h, false));
+    painted = { key, layers };
   }
-  ctx.drawImage(painted.canvas, 0, 0);
-  if (mode === "cook") drawCookFace(ctx, recipe, session);
+  ctx.drawImage(painted.layers[0], 0, 0);
+  if (mode === "poster") return;
+
+  const view = viewFor(ctx.canvas, mode, false);
+  const progress = clockProgress(recipe, session);
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(view.cx, view.cy);
+  ctx.arc(view.cx, view.cy, view.scale * 1.4, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
+  ctx.closePath();
+  ctx.clip();
+  ctx.drawImage(painted.layers[1], 0, 0);
+  ctx.restore();
+  drawCookFace(ctx, recipe, fingerprint, session, view);
 }
 
 export function posterDataUrl(recipe, fingerprint) {
