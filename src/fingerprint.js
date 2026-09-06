@@ -77,7 +77,7 @@ function fieldAt(x, y, wells, bend) {
   return { vx: vx / m, vy: vy / m };
 }
 
-function integrate(start, wells, bend, length, rand) {
+function integrate(start, wells, bend, length, bounds, rand) {
   const points = [start];
   let { x, y } = start;
   for (let i = 0, n = Math.max(4, Math.round(length / STEP)); i < n; i += 1) {
@@ -85,7 +85,7 @@ function integrate(start, wells, bend, length, rand) {
     x += f.vx * STEP + (rand() - 0.5) * 0.0006;
     y += f.vy * STEP + (rand() - 0.5) * 0.0006;
     const r = Math.hypot(x, y);
-    if (r > 1 || r < 0.3) break;
+    if (r < bounds.inner || r > bounds.outer) break;
     points.push({ x, y });
   }
   return points;
@@ -107,7 +107,7 @@ function sweepStrokes(recipe, sectors, wells, bend, drama, rand) {
       const ingredient = weightedPick(rand, recipe.ingredients, (item) => item.grams);
       const tone = rand() < 0.62 ? sector.tone : ROLE_TONE[ingredient.role];
       const length = lerp(0.6, 2.2, rand()) * radius * (0.6 + drama * 0.5);
-      const points = integrate(polar(angle, radius), wells, bend, length, rand);
+      const points = integrate(polar(angle, radius), wells, bend, length, { inner: 0.3, outer: 1 }, rand);
       if (points.length < 4) continue;
       const broad = rand() < 0.18;
       strokes.push({
@@ -168,7 +168,7 @@ function innerStrokes(bend, rand) {
   const strokes = [];
   for (let i = 0, n = 6 + Math.floor(rand() * 6); i < n; i += 1) {
     const radius = 0.08 + rand() * 0.3;
-    const points = integrate(polar(rand() * Math.PI * 2, radius), [], bend, 0.2 + rand() * 0.5, rand);
+    const points = integrate(polar(rand() * Math.PI * 2, radius), [], bend, 0.2 + rand() * 0.5, { inner: 0.02, outer: 0.42 }, rand);
     if (points.length < 4) continue;
     strokes.push({ points, tone: "mute", width: 0.012, alpha: 0.18 + rand() * 0.15, bristles: 3, dry: 0.4 });
   }
