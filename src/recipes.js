@@ -117,7 +117,7 @@ export const recipes = [
         id: "simmer",
         title: "Tomato, lid ajar",
         body: "A lazy blip for the afternoon. Stir when you walk past.",
-        durationSec: 150 * 60,
+        durationSec: 123 * 60,
         kind: "simmer",
         heatC: 95,
         adds: ["tomato passata", "nutmeg"],

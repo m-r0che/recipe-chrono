@@ -241,9 +241,11 @@ function drawCaptions(ctx, map, view, box, top, side, ink, rand) {
   const ceiling = top + side * (WALL.legend - 0.07);
   const blocks = map.captions.map((caption) => {
     const right = Math.cos(caption.angle) >= 0;
+    setType(ctx, fs, { spacing: "0.14em" });
+    const title = wrapWords(ctx, caption.title.toUpperCase(), colWidth);
     setType(ctx, fs, { italic: true });
     const lines = wrapWords(ctx, caption.body, colWidth);
-    return { caption, right, lines, height: lh * (lines.length + 1), y: view.cy + Math.sin(caption.angle) * view.scale * 1.22 };
+    return { caption, right, title, lines, height: lh * (title.length + lines.length), y: view.cy + Math.sin(caption.angle) * view.scale * 1.22 };
   });
   for (const right of [true, false]) {
     const column = blocks.filter((b) => b.right === right).sort((a, b) => a.y - b.y);
@@ -254,7 +256,7 @@ function drawCaptions(ctx, map, view, box, top, side, ink, rand) {
       column[i].y = Math.max(column[i].y, floor);
     }
   }
-  for (const { caption, right, lines, y } of blocks) {
+  for (const { caption, right, title, lines, y } of blocks) {
     const dir = right ? 1 : -1;
     const anchor = { x: view.cx + Math.cos(caption.angle) * view.scale * 1.09, y: view.cy + Math.sin(caption.angle) * view.scale * 1.09 };
     const elbow = { x: view.cx + Math.cos(caption.angle) * view.scale * 1.2, y: view.cy + Math.sin(caption.angle) * view.scale * 1.2 };
@@ -263,18 +265,18 @@ function drawCaptions(ctx, map, view, box, top, side, ink, rand) {
     ctx.fillStyle = ink.ink;
     ctx.globalAlpha = 0.85;
     setType(ctx, fs, { spacing: "0.14em", align: right ? "left" : "right", baseline: "alphabetic" });
-    ctx.fillText(caption.title.toUpperCase(), x + dir * fs * 0.8, y + fs * 0.9);
+    title.forEach((line, i) => ctx.fillText(line, x + dir * fs * 0.8, y + fs * 0.9 + lh * i));
     ctx.fillStyle = ink.mute;
     setType(ctx, fs, { italic: true, align: right ? "left" : "right", baseline: "alphabetic" });
-    lines.forEach((line, i) => ctx.fillText(line, x + dir * fs * 0.8, y + fs * 0.9 + lh * (i + 1)));
+    lines.forEach((line, i) => ctx.fillText(line, x + dir * fs * 0.8, y + fs * 0.9 + lh * (title.length + i)));
     ctx.globalAlpha = 1;
   }
 }
 
 function swatch(ctx, x, y, length, width, tone, alpha, ink, rand) {
   const points = [];
-  for (let t = 0; t <= 1.001; t += 0.1) points.push({ x: t, y: Math.sin(t * Math.PI) * 0.03 });
-  drawSweep(ctx, { kind: "sweep", points, tone, width, alpha, bristles: 6, dry: 0.3, weight: 1 }, { cx: x, cy: y, scale: length, dim: 1 }, rand, ink);
+  for (let t = 0; t <= 1.001; t += 0.05) points.push({ x: t, y: Math.sin(t * Math.PI) * 0.03 });
+  drawSweep(ctx, { kind: "sweep", points, tone, width, alpha, bristles: 5, dry: 0.35, weight: 1 }, { cx: x, cy: y, scale: length, dim: 1 }, rand, ink);
 }
 
 // Role swatches bottom left, a less-to-more stroke scale bottom right.
@@ -294,7 +296,7 @@ function drawLegend(ctx, map, cx, top, side, ink, rand) {
       x = left;
       y += fs * 2.6;
     }
-    swatch(ctx, x, y, swatchLength, 0.3, role, 0.85, ink, rand);
+    swatch(ctx, x, y, swatchLength, 0.22, role, 0.85, ink, rand);
     ctx.fillStyle = ink.mute;
     ctx.globalAlpha = 0.9;
     setType(ctx, fs, { spacing: "0.14em", align: "left" });

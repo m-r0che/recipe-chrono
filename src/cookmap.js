@@ -29,11 +29,11 @@ import { ROLES } from "./palette.js";
  * @typedef {{ angle: number, title: string, body: string }} Caption
  */
 
-export const RING = { inner: 0.5, outer: 0.95 };
-export const SIDE_RING = { inner: 0.32, outer: 0.47 };
-export const DIAL = 0.27;
+export const RING = { inner: 0.52, outer: 0.95 };
+export const SIDE_RING = { inner: 0.34, outer: 0.48 };
+export const DIAL = 0.3;
 const GAP = 0.012;
-const MARK_SPACING = 0.22;
+const MARK_SPACING = 0.6;
 
 const METHOD_ENERGY = { prep: 0.35, cook: 0.7, simmer: 0.55, rest: 0.2, finish: 1 };
 
@@ -48,7 +48,7 @@ function amountScale(grams, maxGrams) {
 
 function stack(ingredients, ring, a0, a1, energy, side, maxGrams) {
   const solids = ingredients.filter((item) => !ROLES[item.role].fleck);
-  const thickness = solids.map((item) => 0.02 + 0.13 * amountScale(item.grams, maxGrams));
+  const thickness = solids.map((item) => 0.03 + 0.2 * amountScale(item.grams, maxGrams));
   const depth = thickness.reduce((n, t) => n + t, 0) + GAP * Math.max(0, solids.length - 1);
   const fit = Math.min(1, (ring.outer - ring.inner) / depth);
   const bands = [];
@@ -86,6 +86,8 @@ export function cookMap(recipe) {
       return item;
     });
   const maxGrams = Math.max(...recipe.ingredients.map((item) => item.grams));
+  const stepSeconds = recipe.steps.reduce((n, step) => n + step.durationSec, 0);
+  if (stepSeconds !== recipe.totalSeconds) throw new Error(`${recipe.id}: steps sum to ${stepSeconds}s, totalSeconds is ${recipe.totalSeconds}s`);
   const angleAt = (seconds) => -Math.PI / 2 + (seconds / recipe.totalSeconds) * Math.PI * 2;
 
   const bands = [];
