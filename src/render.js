@@ -79,20 +79,26 @@ function drawSweep(ctx, s, view, rand, ink) {
   const alpha = s.alpha * view.dim * (0.5 + 0.5 * weight);
   const pts = resample(s.points, Math.max(1.5, view.scale * 0.006) / view.scale);
   const hairs = s.bristles;
+  const sway = 0.03 + rand() * 0.09;
   ctx.strokeStyle = ink[s.tone];
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  for (let k = 0; k <= hairs; k += 1) {
+  // Three passes build the colour like a wash: a wide wet underlay, then dry
+  // broken hairs of varied width, then a fine grain pass over the top.
+  for (let k = s.width > 0.04 ? -1 : 0; k <= hairs; k += 1) {
+    const wet = k === -1;
     const grain = k === hairs;
-    const offset = hairs === 1 ? 0 : (k % hairs) / (hairs - 1) - 0.5;
+    const offset = wet || hairs === 1 ? 0 : (k % hairs) / (hairs - 1) - 0.5;
     const wobble = [3 + rand() * 6, rand() * Math.PI * 2, 9 + rand() * 12, rand() * Math.PI * 2];
-    const amp = grain ? 0.16 : 0.05;
-    const base = grain ? Math.max(0.5, (w / (hairs * 1.15)) * 0.4) : Math.max(0.6, (w / (hairs * 1.15)) * (0.55 + rand() * 0.9));
-    ctx.globalAlpha = grain ? alpha * (0.55 - 0.3 * weight) : alpha * (0.5 + rand() * 0.5);
+    const amp = wet ? 0.02 : grain ? 0.16 : sway;
+    const hair = w / (hairs * 1.15);
+    const base = wet ? w * 0.9 : grain ? Math.max(0.5, hair * 0.4) : Math.max(0.6, hair * (0.35 + rand() * 1.3));
+    const dry = wet ? s.dry * 0.15 : grain ? s.dry * 0.5 : s.dry * (0.6 + rand() * 0.9);
+    ctx.globalAlpha = wet ? alpha * 0.1 : grain ? alpha * (0.55 - 0.3 * weight) : alpha * (0.35 + rand() * 0.6);
     for (const [t0, t1] of CHUNKS) {
       ctx.lineWidth = base * (0.35 + 0.65 * Math.pow(taper((t0 + t1) / 2), 0.7));
       ctx.beginPath();
-      hairPath(ctx, pts, view, offset, wobble, amp, w, grain ? s.dry * 0.5 : s.dry, rand, t0, t1);
+      hairPath(ctx, pts, view, offset, wobble, amp, w, dry, rand, t0, t1);
       ctx.stroke();
     }
   }
@@ -118,13 +124,30 @@ function drawWash(ctx, s, view, rand, ink) {
   const x = view.cx + s.x * view.scale;
   const y = view.cy + s.y * view.scale;
   const r = s.r * view.scale;
-  const fill = ctx.createRadialGradient(x, y, 0, x, y, r);
-  fill.addColorStop(0, rgba(ink[s.tone], s.alpha * view.dim));
-  fill.addColorStop(0.7, rgba(ink[s.tone], s.alpha * view.dim * 0.6));
+  const a = s.alpha * view.dim;
+  // Pigment pools at the edge as the wash dries, and the edge itself
+  // cauliflowers: a thin centre, a dark rim, and a wobbly outline.
+  const fill = ctx.createRadialGradient(x, y, 0, x, y, r * 1.25);
+  fill.addColorStop(0, rgba(ink[s.tone], a * 0.4));
+  fill.addColorStop(0.55, rgba(ink[s.tone], a * 0.6));
+  fill.addColorStop(0.85, rgba(ink[s.tone], a * 1.25));
   fill.addColorStop(1, rgba(ink[s.tone], 0));
   ctx.fillStyle = fill;
+  const squash = 0.75 + rand() * 0.5;
+  const tilt = rand() * Math.PI;
+  const lobes = [rand() * Math.PI * 2, rand() * Math.PI * 2];
   ctx.beginPath();
-  ctx.ellipse(x, y, r * (0.8 + rand() * 0.4), r * (0.8 + rand() * 0.4), rand() * Math.PI, 0, Math.PI * 2);
+  for (let i = 0; i <= 40; i += 1) {
+    const t = (i / 40) * Math.PI * 2;
+    const rr = r * (1 + 0.12 * Math.sin(3 * t + lobes[0]) + 0.08 * Math.sin(7 * t + lobes[1]) + (rand() - 0.5) * 0.06);
+    const ex = Math.cos(t) * rr;
+    const ey = Math.sin(t) * rr * squash;
+    const px = x + ex * Math.cos(tilt) - ey * Math.sin(tilt);
+    const py = y + ex * Math.sin(tilt) + ey * Math.cos(tilt);
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
   ctx.fill();
 }
 
