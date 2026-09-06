@@ -20,7 +20,6 @@ export function listenForCookCommands(onCommand) {
     try {
       rec.start();
     } catch {
-      /* browser ended the session */
     }
   };
 
