@@ -1,45 +1,13 @@
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
+import { writeFileSync } from "node:fs";
+import { openPage, sleep } from "./cdp.mjs";
 
-function attach(wsUrl) {
-  const ws = new WebSocket(wsUrl);
-  let next = 1;
-  const pending = new Map();
-  const ready = new Promise((resolve, reject) => {
-    ws.addEventListener("open", resolve);
-    ws.addEventListener("error", reject);
-  });
-  ws.addEventListener("message", (ev) => {
-    const msg = JSON.parse(ev.data);
-    if (msg.id && pending.has(msg.id)) {
-      pending.get(msg.id)(msg);
-      pending.delete(msg.id);
-    }
-  });
-  const send = (method, params = {}) => {
-    const id = next;
-    next += 1;
-    const done = new Promise((resolve) => pending.set(id, resolve));
-    ws.send(JSON.stringify({ id, method, params }));
-    return done;
-  };
-  return { ready, send, close: () => ws.close() };
-}
-
-const port = process.env.CDP_PORT || "9333";
-const created = await fetch(`http://127.0.0.1:${port}/json/new?http://127.0.0.1:5173/?recipe=cacio-e-pepe`, {
-  method: "PUT",
-});
-const target = await created.json();
-const cdp = attach(target.webSocketDebuggerUrl);
-await cdp.ready;
-await cdp.send("Page.enable");
-await cdp.send("Runtime.enable");
+const page = await openPage("http://127.0.0.1:5173/?recipe=cacio-e-pepe");
+await page.send("Page.enable");
+await page.send("Runtime.enable");
 await sleep(1000);
 
 const read = async () => {
-  const msg = await cdp.send("Runtime.evaluate", {
+  const msg = await page.send("Runtime.evaluate", {
     expression: `JSON.stringify({
       mode: document.body.classList.contains("is-cook") ? "cook" : "poster",
       kicker: document.getElementById("step-kicker")?.textContent ?? null,
@@ -55,21 +23,21 @@ const read = async () => {
   return JSON.parse(msg.result.result.value);
 };
 
+const pressSpace = async () => {
+  await page.send("Input.dispatchKeyEvent", { type: "keyDown", key: " ", code: "Space", windowsVirtualKeyCode: 32 });
+  await page.send("Input.dispatchKeyEvent", { type: "keyUp", key: " ", code: "Space", windowsVirtualKeyCode: 32 });
+  await sleep(400);
+};
+
 const before = await read();
-await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: " ", code: "Space", windowsVirtualKeyCode: 32 });
-await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: " ", code: "Space", windowsVirtualKeyCode: 32 });
-await sleep(400);
+await pressSpace();
 const started = await read();
-await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: " ", code: "Space", windowsVirtualKeyCode: 32 });
-await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: " ", code: "Space", windowsVirtualKeyCode: 32 });
-await sleep(400);
+await pressSpace();
 const stepped = await read();
 
-const shot = await cdp.send("Page.captureScreenshot", { format: "png" });
-const { writeFileSync } = await import("node:fs");
-writeFileSync("/workspace/artifacts/cook-cacio-after-space.png", Buffer.from(shot.result.data, "base64"));
-
-cdp.close();
+const shot = await page.send("Page.captureScreenshot", { format: "png" });
+writeFileSync("artifacts/cook-cacio-after-space.png", Buffer.from(shot.result.data, "base64"));
+await page.close();
 
 const report = { before, started, stepped };
 const ok =
