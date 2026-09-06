@@ -1,9 +1,14 @@
+import { DIAL, cookMap, timeLabel } from "./cookmap.js";
+import { ROLES, roleInks } from "./palette.js";
 import { clamp, lerp, mulberry32 } from "./rng.js";
 import { clockProgress } from "./session.js";
 
-const POSTER = { cy: 0.47, scale: 0.36, dim: 1 };
+// The wall composition in fractions of the square side: title block, ring,
+// legend baseline, and the caption columns either side of the ring.
+const WALL = { title: 0.07, sub: 0.102, tick: 0.122, cy: 0.53, radius: 0.25, legend: 0.915, column: 0.3 };
 const COOK = { cy: 0.5, scale: 0.3, dim: 0.6 };
 const GHOST_DIM = 0.28;
+const SERIF = '"Source Serif 4", Georgia, serif';
 
 // Width envelope for a tapered hair, sampled once per chunk so canvas can
 // keep one lineWidth per path.
@@ -22,8 +27,9 @@ function rgba(hex, alpha) {
 
 // On dark paper charcoal vanishes, so cook mode lifts the dark tones to a warm grey.
 function inkFor(palette, mode) {
-  if (mode === "poster") return palette;
-  return { ...palette, soot: palette.mute, ink: palette.mute };
+  const inks = { ...palette, ...roleInks(mode) };
+  if (mode === "poster") return inks;
+  return { ...inks, soot: palette.mute, ink: palette.mute };
 }
 
 function resample(points, spacing) {
@@ -109,7 +115,7 @@ function drawFiling(ctx, s, view, rand, ink) {
   const l = s.length * view.scale;
   const x = view.cx + s.x * view.scale;
   const y = view.cy + s.y * view.scale;
-  ctx.strokeStyle = ink.soot;
+  ctx.strokeStyle = ink[s.tone];
   ctx.lineCap = "round";
   ctx.lineWidth = Math.max(0.7, view.scale * 0.0035) * (0.7 + rand() * 0.6);
   ctx.globalAlpha = s.alpha * view.dim * (view.weight === 0 ? 0.35 : 1);
@@ -165,36 +171,196 @@ function drawPaper(ctx, w, h, palette, rand, mode) {
   ctx.globalAlpha = 1;
 }
 
-function drawCaption(ctx, recipe, view) {
-  ctx.fillStyle = recipe.palette.ink;
-  ctx.globalAlpha = 0.8;
-  ctx.textAlign = "center";
-  ctx.font = `400 ${Math.max(11, view.scale * 0.045)}px "Source Serif 4", Georgia, serif`;
-  ctx.fillText(recipe.name.toUpperCase().split("").join(" "), view.cx, view.cy + view.scale * 1.22);
+function setType(ctx, px, { italic = false, spacing = "0", align = "center", baseline = "middle" } = {}) {
+  ctx.font = `${italic ? "italic" : "normal"} 400 ${px}px ${SERIF}`;
+  ctx.letterSpacing = spacing;
+  ctx.textAlign = align;
+  ctx.textBaseline = baseline;
+}
+
+function wrapWords(ctx, text, maxWidth) {
+  const lines = [];
+  let line = "";
+  for (const word of text.split(" ")) {
+    const next = line ? `${line} ${word}` : word;
+    if (line && ctx.measureText(next).width > maxWidth) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = next;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+// A hairline drawn with the sweep brush, so rules and leaders share the ink.
+function hairline(ctx, points, ink, rand, alpha = 0.55) {
+  drawSweep(
+    ctx,
+    { kind: "sweep", points, tone: "mute", width: 1.2, alpha, bristles: 1, dry: 0.04, weight: 1 },
+    { cx: 0, cy: 0, scale: 1, dim: 1 },
+    rand,
+    ink,
+  );
+}
+
+function drawTitle(ctx, recipe, cx, top, side, ink, rand) {
+  ctx.fillStyle = ink.ink;
+  ctx.globalAlpha = 0.9;
+  setType(ctx, side * 0.03, { spacing: "0.22em" });
+  ctx.fillText(recipe.name.toUpperCase(), cx, top + side * WALL.title);
+  ctx.fillStyle = ink.mute;
+  setType(ctx, side * 0.015, { spacing: "0.2em" });
+  ctx.fillText(`${timeLabel(recipe.totalSeconds)}.`, cx, top + side * WALL.sub);
+  ctx.globalAlpha = 1;
+  const y = top + side * WALL.tick;
+  hairline(ctx, [{ x: cx - side * 0.012, y }, { x: cx, y: y + side * 0.001 }, { x: cx + side * 0.012, y }], ink, rand, 0.7);
+}
+
+// Time labels sit just inside the dial at each kept step boundary.
+function drawMarks(ctx, map, view, side, ink) {
+  ctx.fillStyle = ink.mute;
+  ctx.globalAlpha = 0.9;
+  setType(ctx, Math.max(9, side * 0.011), { spacing: "0.12em" });
+  for (const mark of map.marks) {
+    const r = (DIAL - 0.06) * view.scale;
+    ctx.fillText(mark.label, view.cx + Math.cos(mark.angle) * r, view.cy + Math.sin(mark.angle) * r);
+  }
   ctx.globalAlpha = 1;
 }
 
-function viewFor(canvas, mode, ghost) {
-  const layout = mode === "poster" ? POSTER : COOK;
+// One caption per step in the margin columns, a hairline leader from the ring
+// to it. Blocks on the same side are pushed apart so they never overlap.
+function drawCaptions(ctx, map, view, box, top, side, ink, rand) {
+  const fs = Math.max(9, side * 0.0125);
+  const lh = fs * 1.4;
+  const colInner = side * WALL.column;
+  const colWidth = Math.max(fs * 8, box.w / 2 - colInner - side * 0.035);
+  const floor = top + side * 0.16;
+  const ceiling = top + side * (WALL.legend - 0.07);
+  const blocks = map.captions.map((caption) => {
+    const right = Math.cos(caption.angle) >= 0;
+    setType(ctx, fs, { italic: true });
+    const lines = wrapWords(ctx, caption.body, colWidth);
+    return { caption, right, lines, height: lh * (lines.length + 1), y: view.cy + Math.sin(caption.angle) * view.scale * 1.22 };
+  });
+  for (const right of [true, false]) {
+    const column = blocks.filter((b) => b.right === right).sort((a, b) => a.y - b.y);
+    for (let i = 1; i < column.length; i += 1) column[i].y = Math.max(column[i].y, column[i - 1].y + column[i - 1].height + lh * 0.6);
+    for (let i = column.length - 1; i >= 0; i -= 1) {
+      const limit = i === column.length - 1 ? ceiling : column[i + 1].y - lh * 0.6;
+      column[i].y = Math.min(column[i].y, limit - column[i].height);
+      column[i].y = Math.max(column[i].y, floor);
+    }
+  }
+  for (const { caption, right, lines, y } of blocks) {
+    const dir = right ? 1 : -1;
+    const anchor = { x: view.cx + Math.cos(caption.angle) * view.scale * 1.09, y: view.cy + Math.sin(caption.angle) * view.scale * 1.09 };
+    const elbow = { x: view.cx + Math.cos(caption.angle) * view.scale * 1.2, y: view.cy + Math.sin(caption.angle) * view.scale * 1.2 };
+    const x = view.cx + dir * colInner;
+    hairline(ctx, [anchor, elbow, { x, y: y + fs * 0.5 }], ink, rand, 0.45);
+    ctx.fillStyle = ink.ink;
+    ctx.globalAlpha = 0.85;
+    setType(ctx, fs, { spacing: "0.14em", align: right ? "left" : "right", baseline: "alphabetic" });
+    ctx.fillText(caption.title.toUpperCase(), x + dir * fs * 0.8, y + fs * 0.9);
+    ctx.fillStyle = ink.mute;
+    setType(ctx, fs, { italic: true, align: right ? "left" : "right", baseline: "alphabetic" });
+    lines.forEach((line, i) => ctx.fillText(line, x + dir * fs * 0.8, y + fs * 0.9 + lh * (i + 1)));
+    ctx.globalAlpha = 1;
+  }
+}
+
+function swatch(ctx, x, y, length, width, tone, alpha, ink, rand) {
+  const points = [];
+  for (let t = 0; t <= 1.001; t += 0.1) points.push({ x: t, y: Math.sin(t * Math.PI) * 0.03 });
+  drawSweep(ctx, { kind: "sweep", points, tone, width, alpha, bristles: 6, dry: 0.3, weight: 1 }, { cx: x, cy: y, scale: length, dim: 1 }, rand, ink);
+}
+
+// Role swatches bottom left, a less-to-more stroke scale bottom right.
+function drawLegend(ctx, map, cx, top, side, ink, rand) {
+  const fs = Math.max(9, side * 0.0115);
+  const left = cx - side * 0.44;
+  const baseline = top + side * WALL.legend;
+  const swatchLength = side * 0.045;
+  let x = left;
+  let y = baseline;
+  ctx.fillStyle = ink.mute;
+  setType(ctx, fs, { spacing: "0.14em", align: "left" });
+  for (const role of map.roles) {
+    const label = ROLES[role].label.toUpperCase();
+    const width = swatchLength + fs * 0.9 + ctx.measureText(label).width + fs * 2.2;
+    if (x + width > cx + side * 0.06 && x > left) {
+      x = left;
+      y += fs * 2.6;
+    }
+    swatch(ctx, x, y, swatchLength, 0.3, role, 0.85, ink, rand);
+    ctx.fillStyle = ink.mute;
+    ctx.globalAlpha = 0.9;
+    setType(ctx, fs, { spacing: "0.14em", align: "left" });
+    ctx.fillText(label, x + swatchLength + fs * 0.9, y);
+    ctx.globalAlpha = 1;
+    x += width;
+  }
+
+  const right = cx + side * 0.44;
+  const scaleLength = side * 0.2;
+  const strokes = 5;
+  for (let i = 0; i < strokes; i += 1) {
+    const t = i / (strokes - 1);
+    const x0 = right - scaleLength + (scaleLength / strokes) * i;
+    swatch(ctx, x0, baseline, scaleLength / strokes - fs * 0.5, lerp(0.02, 0.32, t * t), "ink", lerp(0.35, 0.9, t), ink, rand);
+  }
+  ctx.fillStyle = ink.mute;
+  ctx.globalAlpha = 0.9;
+  setType(ctx, fs, { spacing: "0.14em", align: "center" });
+  ctx.fillText("AMOUNT", right - scaleLength / 2, baseline - fs * 2.2);
+  setType(ctx, fs * 0.9, { spacing: "0.14em", align: "left" });
+  ctx.fillText("LESS", right - scaleLength, baseline + fs * 1.9);
+  setType(ctx, fs * 0.9, { spacing: "0.14em", align: "right" });
+  ctx.fillText("MORE", right, baseline + fs * 1.9);
+  ctx.globalAlpha = 1;
+}
+
+function drawStrokes(ctx, fingerprint, view, ink, rand) {
+  for (const stroke of fingerprint.strokes) {
+    BRUSH[stroke.kind](ctx, stroke, view, rand, ink);
+  }
+}
+
+// The print: paper, title, the ring, quiet time marks, captions in the
+// margins, and the legend. `box` is the region the square composition sits
+// in; a wider box only widens the caption columns.
+function paintWall(ctx, recipe, fingerprint, box) {
+  const rand = mulberry32(fingerprint.seed ^ 0x9e3779b9);
+  const ink = inkFor(recipe.palette, "poster");
+  const side = Math.min(box.w, box.h);
+  const cx = box.x + box.w / 2;
+  const top = box.y + (box.h - side) / 2;
+  const view = { cx, cy: top + side * WALL.cy, scale: side * WALL.radius, dim: 1 };
+  const map = cookMap(recipe);
+  drawPaper(ctx, ctx.canvas.width, ctx.canvas.height, recipe.palette, rand, "poster");
+  drawTitle(ctx, recipe, cx, top, side, ink, rand);
+  drawStrokes(ctx, fingerprint, view, ink, rand);
+  drawMarks(ctx, map, view, side, ink);
+  drawCaptions(ctx, map, view, box, top, side, ink, rand);
+  drawLegend(ctx, map, cx, top, side, ink, rand);
+}
+
+function cookView(canvas, ghost) {
   return {
     cx: canvas.width / 2,
-    cy: canvas.height * layout.cy,
-    scale: Math.min(canvas.width, canvas.height) * layout.scale,
-    dim: ghost ? GHOST_DIM : layout.dim,
+    cy: canvas.height * COOK.cy,
+    scale: Math.min(canvas.width, canvas.height) * COOK.scale,
+    dim: ghost ? GHOST_DIM : COOK.dim,
     weight: ghost ? 0 : undefined,
   };
 }
 
-function paintFingerprint(ctx, recipe, fingerprint, mode, ghost = false) {
-  const { width: w, height: h } = ctx.canvas;
+function paintCookLayer(ctx, recipe, fingerprint, ghost) {
   const rand = mulberry32(fingerprint.seed ^ 0x9e3779b9);
-  const ink = inkFor(recipe.palette, mode);
-  const view = viewFor(ctx.canvas, mode, ghost);
-  drawPaper(ctx, w, h, recipe.palette, rand, mode);
-  for (const stroke of fingerprint.strokes) {
-    BRUSH[stroke.kind](ctx, stroke, view, rand, ink);
-  }
-  if (mode === "poster") drawCaption(ctx, recipe, view);
+  drawPaper(ctx, ctx.canvas.width, ctx.canvas.height, recipe.palette, rand, "cook");
+  drawStrokes(ctx, fingerprint, cookView(ctx.canvas, ghost), inkFor(recipe.palette, "cook"), rand);
 }
 
 // Poster layers paint at 2x and downsample so pigment edges go soft instead
@@ -206,7 +372,9 @@ function paintLayer(recipe, fingerprint, mode, w, h, ghost) {
   const big = document.createElement("canvas");
   big.width = w * ss;
   big.height = h * ss;
-  paintFingerprint(big.getContext("2d"), recipe, fingerprint, mode, ghost);
+  const bigCtx = big.getContext("2d");
+  if (mode === "poster") paintWall(bigCtx, recipe, fingerprint, { x: 0, y: 0, w: big.width, h: big.height });
+  else paintCookLayer(bigCtx, recipe, fingerprint, ghost);
   if (ss === 1) return big;
   const canvas = document.createElement("canvas");
   canvas.width = w;
@@ -222,20 +390,21 @@ function paintLayer(recipe, fingerprint, mode, w, h, ghost) {
 function drawProgressSweep(ctx, recipe, fingerprint, view, progress) {
   const rand = mulberry32(fingerprint.seed);
   const now = progress * Math.PI * 2 - Math.PI / 2;
+  const ink = { ...recipe.palette, gold: ROLES.starch.night };
   const gold = { kind: "sweep", tone: "gold", alpha: 1, dry: 0.12, weight: 1 };
   const radial = (angle, r0, r1) => {
     const points = [];
     for (let r = r0; r <= r1; r += 0.01) points.push({ x: Math.cos(angle) * r, y: Math.sin(angle) * r });
     return points;
   };
-  drawSweep(ctx, { ...gold, points: radial(-Math.PI / 2, 0.9, 1.05), width: 0.02, bristles: 3 }, { ...view, dim: 1 }, rand, recipe.palette);
-  drawSweep(ctx, { ...gold, points: radial(now, 0.46, 1.03), width: 0.03, bristles: 4 }, { ...view, dim: 1 }, rand, recipe.palette);
+  drawSweep(ctx, { ...gold, points: radial(-Math.PI / 2, 0.9, 1.05), width: 0.02, bristles: 3 }, { ...view, dim: 1 }, rand, ink);
+  drawSweep(ctx, { ...gold, points: radial(now, 0.46, 1.03), width: 0.03, bristles: 4 }, { ...view, dim: 1 }, rand, ink);
   const rim = [];
   for (let a = -Math.PI / 2; a <= now; a += 0.02) {
     rim.push({ x: Math.cos(a) * 1.02, y: Math.sin(a) * 1.02 });
   }
   if (rim.length < 2) return;
-  drawSweep(ctx, { ...gold, points: rim, width: 0.034, bristles: 4 }, { ...view, dim: 1 }, rand, recipe.palette);
+  drawSweep(ctx, { ...gold, points: rim, width: 0.034, bristles: 4 }, { ...view, dim: 1 }, rand, ink);
 }
 
 function drawCookFace(ctx, recipe, fingerprint, session, view) {
@@ -247,7 +416,7 @@ function drawCookFace(ctx, recipe, fingerprint, session, view) {
   drawProgressSweep(ctx, recipe, fingerprint, view, clockProgress(recipe, session));
 }
 
-// Painting costs tens of milliseconds, so each layer is painted once per
+// Painting costs hundreds of milliseconds, so each layer is painted once per
 // recipe, mode, and canvas size. Cook mode keeps a ghost and a full layer and
 // reveals the full one inside the elapsed wedge.
 let painted = { key: "", layers: [] };
@@ -263,7 +432,7 @@ export function paintClock(ctx, recipe, fingerprint, session, mode) {
   ctx.drawImage(painted.layers[0], 0, 0);
   if (mode === "poster") return;
 
-  const view = viewFor(ctx.canvas, mode, false);
+  const view = cookView(ctx.canvas, false);
   const progress = clockProgress(recipe, session);
   ctx.save();
   ctx.beginPath();
@@ -276,15 +445,23 @@ export function paintClock(ctx, recipe, fingerprint, session, mode) {
   drawCookFace(ctx, recipe, fingerprint, session, view);
 }
 
-export function posterDataUrl(recipe, fingerprint) {
-  return paintLayer(recipe, fingerprint, "poster", 2400, 3200, false).toDataURL("image/png");
+// Two prints from one composition: the square wall print and the portrait
+// poster, which is the same square with paper above and below.
+export const EXPORTS = {
+  wall: { w: 2400, h: 2400 },
+  poster: { w: 2400, h: 3200 },
+};
+
+export function exportDataUrl(recipe, fingerprint, kind) {
+  const { w, h } = EXPORTS[kind];
+  return paintLayer(recipe, fingerprint, "poster", w, h, false).toDataURL("image/png");
 }
 
-export function exportPosterPng(recipe, fingerprint) {
-  const href = posterDataUrl(recipe, fingerprint);
+export function downloadExport(recipe, fingerprint, kind) {
+  const href = exportDataUrl(recipe, fingerprint, kind);
   const a = document.createElement("a");
   a.href = href;
-  a.download = `recipe-chrono-${recipe.id}.png`;
+  a.download = `recipe-chrono-${recipe.id}-${kind}.png`;
   a.click();
   return href;
 }

@@ -1,6 +1,6 @@
 import { recipes, recipeById } from "./recipes.js";
 import { buildFingerprint } from "./fingerprint.js";
-import { paintClock, exportPosterPng, posterDataUrl } from "./render.js";
+import { downloadExport, exportDataUrl, paintClock } from "./render.js";
 import {
   activeSideTimers,
   applyCommand,
@@ -124,9 +124,8 @@ function frame(ts) {
 
 document.getElementById("mode-poster").addEventListener("click", () => setMode("poster"));
 document.getElementById("mode-cook").addEventListener("click", () => setMode("cook"));
-document.getElementById("export").addEventListener("click", () => {
-  exportPosterPng(state.recipe, state.fingerprint);
-});
+document.getElementById("export-wall").addEventListener("click", () => downloadExport(state.recipe, state.fingerprint, "wall"));
+document.getElementById("export").addEventListener("click", () => downloadExport(state.recipe, state.fingerprint, "poster"));
 
 window.addEventListener("keydown", (event) => {
   if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
@@ -149,7 +148,8 @@ keysEl.textContent = voice.available
   ? "Space next · R repeat · S skip · voice on"
   : "Space next · R repeat · S skip";
 
-window.__posterPng = () => posterDataUrl(state.recipe, state.fingerprint);
+window.__posterPng = () => exportDataUrl(state.recipe, state.fingerprint, "poster");
+window.__wallPng = () => exportDataUrl(state.recipe, state.fingerprint, "wall");
 
 window.addEventListener("resize", resize);
 
@@ -171,10 +171,11 @@ if (elapsed > 0) {
 syncChrome();
 resize();
 
-if (params.get("dump") === "poster") {
+const dump = params.get("dump");
+if (dump === "poster" || dump === "wall") {
   const img = document.createElement("img");
-  img.alt = `${state.recipe.name} poster`;
-  img.src = posterDataUrl(state.recipe, state.fingerprint);
+  img.alt = `${state.recipe.name} ${dump}`;
+  img.src = exportDataUrl(state.recipe, state.fingerprint, dump);
   document.documentElement.replaceChildren(img);
 } else {
   requestAnimationFrame(frame);
