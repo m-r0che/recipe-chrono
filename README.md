@@ -33,3 +33,7 @@ Open the URL Vite prints, usually `http://localhost:5173`.
 ## Files
 
 `src/fingerprint.js` turns a recipe into rings, wells, and strokes. `src/session.js` is the cook state machine. `src/render.js` sprays the canvas. `src/main.js` wires the page.
+
+Deep links: `?recipe=roast-supper&mode=cook&advance=2`. `?dump=poster` renders the export canvas alone.
+
+`artifacts/` holds page screenshots and 2400×3200 poster PNGs. From a running `npm run dev` and a Chrome with `--remote-debugging-port=9333`, run `node scripts/prove-space.mjs` to confirm Space starts cook mode and advances Cacio e Pepe.

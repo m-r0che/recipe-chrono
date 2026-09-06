@@ -1,6 +1,6 @@
 import { recipes, recipeById } from "./recipes.js";
 import { buildFingerprint } from "./fingerprint.js";
-import { paintClock, exportPosterPng } from "./render.js";
+import { paintClock, exportPosterPng, posterDataUrl } from "./render.js";
 import {
   activeSideTimers,
   applyCommand,
@@ -149,8 +149,33 @@ keysEl.textContent = voice.available
   ? "Space next · R repeat · S skip · voice on"
   : "Space next · R repeat · S skip";
 
+window.__posterPng = () => posterDataUrl(state.recipe, state.fingerprint);
+
 window.addEventListener("resize", resize);
-selectRecipe(recipes[0].id);
-setMode("poster");
+
+const params = new URLSearchParams(window.location.search);
+selectRecipe(params.get("recipe") || recipes[0].id);
+setMode(params.get("mode") === "cook" ? "cook" : "poster");
+const advances = Number(params.get("advance") || 0);
+for (let i = 0; i < advances; i += 1) {
+  state.session = applyCommand(state.session, state.recipe, "next");
+}
+const elapsed = Number(params.get("elapsed") || 0);
+if (elapsed > 0) {
+  state.session = {
+    ...state.session,
+    status: "running",
+    stepElapsedMs: elapsed * 1000,
+  };
+}
+syncChrome();
 resize();
-requestAnimationFrame(frame);
+
+if (params.get("dump") === "poster") {
+  const img = document.createElement("img");
+  img.alt = `${state.recipe.name} poster`;
+  img.src = posterDataUrl(state.recipe, state.fingerprint);
+  document.documentElement.replaceChildren(img);
+} else {
+  requestAnimationFrame(frame);
+}

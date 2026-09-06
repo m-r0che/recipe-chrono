@@ -148,6 +148,10 @@ body.is-cook {
   padding-bottom: 4vh;
 }
 
+.readout[hidden] {
+  display: none;
+}
+
 .readout-kicker {
   margin: 0;
   letter-spacing: 0.18em;

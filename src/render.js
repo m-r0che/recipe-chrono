@@ -156,7 +156,7 @@ export function paintClock(ctx, recipe, fingerprint, session, mode, nowMs) {
   }
 }
 
-export function exportPosterPng(recipe, fingerprint) {
+export function posterDataUrl(recipe, fingerprint) {
   const canvas = document.createElement("canvas");
   canvas.width = 2400;
   canvas.height = 3200;
@@ -168,7 +168,11 @@ export function exportPosterPng(recipe, fingerprint) {
     stepElapsedMs: 0,
   };
   paintClock(ctx, recipe, fingerprint, dummy, "poster", 0);
-  const href = canvas.toDataURL("image/png");
+  return canvas.toDataURL("image/png");
+}
+
+export function exportPosterPng(recipe, fingerprint) {
+  const href = posterDataUrl(recipe, fingerprint);
   const a = document.createElement("a");
   a.href = href;
   a.download = `recipe-chrono-${recipe.id}.png`;
