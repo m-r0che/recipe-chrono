@@ -8,13 +8,20 @@ The mapping is borrowed from Zeh Fernandes' World Cup posters. There the match i
 
 ## The stroke language
 
-`src/fingerprint.js` emits a list of strokes in unit space, where 1 is the outer edge of the ring and time runs clockwise from twelve. A stroke is a polyline plus a palette tone, a brush width, an alpha, a bristle count, and a `dry` value.
+`src/fingerprint.js` emits a list of marks in unit space, where 1 is the outer edge of the ring and time runs clockwise from twelve. Every mark has a `kind`, and `src/render.js` draws it with the brush of that name from the `BRUSH` table. There are three brushes and nothing else touches the canvas. The primitives follow Kengo's self-portrait sketch, rebuilt in plain Canvas 2D.
 
-- **Sweeps.** Strokes start in one of seven radial bands and follow a clockwise field for 0.6 to 2.2 radians, so they cross sector boundaries and blend the tones. A low-frequency twist bends the field so arcs never run perfectly parallel.
-- **Wells.** Every step boundary is an event. It places a well that pulls and swirls the field nearby, and emits a charcoal burst of short rays and blots. Finish, simmer, and high-heat steps make stronger wells. Spice ingredients add rays.
+- **`sweep`.** A wobbly dry-brush polyline. The renderer resamples the path to even spacing, offsets each hair along the normal with two sine frequencies plus jitter, tapers the width in and out, and adds a thinner grain pass at lower alpha and higher amplitude for pencil texture. Hairs lift off the paper with probability `dry`. Each sweep carries a `weight` from its step's energy. Prep and rest paint thin, pale, and grainy. Cook, simmer, and finish paint full ink. That is the inside/outside mask.
+- **`filing`.** A short dash aligned to the field around the climax pole, the strongest well. The pole's pull is exaggerated so the dashes bend toward it like iron filings.
+- **`wash`.** A soft radial blob laid at each well before the charcoal contour ink goes on top.
+
+Where the marks come from:
+
+- **Sweeps** start in one of seven radial bands and follow a clockwise field for 0.6 to 2.2 radians, so they cross sector boundaries and blend the tones. A low-frequency twist bends the field so arcs never run perfectly parallel.
+- **Wells.** Every step boundary is an event. It places a well that pulls and swirls the field nearby, lays a wash, and emits a charcoal burst of short rays and blots. Finish, simmer, and high-heat steps make stronger wells. Spice ingredients add rays.
 - **Side timers.** A timer inside a step paints a thinner olive band inside the main ring over its own angular span.
+- **Paper grain.** Ink specks at 0.045 alpha, scaled to canvas area so the export is grained too.
 
-`src/render.js` has one brush primitive, `brushStroke`. It draws each stroke as several bristle lines offset along the normal. Hairs converge at both ends, wobble a little, and lift off the paper with probability `dry`, which leaves bare paper between them. The poster carries only a small caption. Cook mode paints the same strokes at 45% alpha on dark paper, swaps charcoal for a warm grey, and draws the progress arc and a centre shade on top.
+The poster carries only a small caption. Cook mode paints two layers on dark paper, a ghost with every weight at zero and a full one, and reveals the full layer inside the elapsed wedge. Charcoal becomes a warm grey there. The clock itself is drawn with the `sweep` brush: a gold rim from twelve to now, a radial hand at now, and a tick at twelve, reseeded each frame so they hold still.
 
 ## Run it
 
@@ -46,4 +53,4 @@ Open the URL Vite prints, usually `http://localhost:5173`.
 
 Deep links: `?recipe=roast-supper&mode=cook&advance=2`. `?dump=poster` renders the export canvas alone.
 
-`artifacts/` holds page screenshots and 2400×3200 poster PNGs. The `before-` files show the pointillist ring this branch replaced. From a running `npm run dev` and a Chrome with `--remote-debugging-port=9333`, run `node scripts/capture.mjs` for the page shots, `node scripts/export-posters.mjs` for the PNGs, and `node scripts/prove-space.mjs` to confirm Space starts cook mode and advances Cacio e Pepe.
+`artifacts/` holds page screenshots and 2400×3200 poster PNGs. The `before-` files show the pointillist ring this branch replaced, and the `v1-` files show the first dry-brush pass before the Kengo primitives. From a running `npm run dev` and a Chrome with `--remote-debugging-port=9333`, run `node scripts/capture.mjs` for the page shots, `node scripts/export-posters.mjs` for the PNGs, and `node scripts/prove-space.mjs` to confirm Space starts cook mode and advances Cacio e Pepe.
