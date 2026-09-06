@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Recipe Chrono</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,560;0,9..144,700;1,9..144,400&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <aside class="rail">
+        <p class="mark">Recipe Chrono</p>
+        <h1 id="recipe-title">Cacio e Pepe</h1>
+        <p id="recipe-lede" class="lede"></p>
+        <nav class="picker" id="picker" aria-label="Recipes"></nav>
+        <div class="mode-row" role="group" aria-label="Surface">
+          <button type="button" id="mode-poster" class="mode is-on">Poster</button>
+          <button type="button" id="mode-cook" class="mode">Cook</button>
+        </div>
+        <button type="button" id="export" class="export">Export poster PNG</button>
+        <p class="keys" id="keys">
+          Space next · R repeat · S skip
+        </p>
+      </aside>
+      <main class="stage">
+        <canvas id="clock" aria-label="Recipe clock"></canvas>
+        <div id="cook-readout" class="readout" hidden>
+          <p class="readout-kicker" id="step-kicker">Ready</p>
+          <p class="readout-step" id="step-title"></p>
+          <p class="readout-time" id="step-time"></p>
+          <ul class="readout-timers" id="side-timers"></ul>
+        </div>
+      </main>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
