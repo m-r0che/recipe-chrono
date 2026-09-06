@@ -1,3 +1,9 @@
+/**
+ * A step's `adds` names the ingredients that go in during that step, in the
+ * order they go in; each one becomes a band whose hue is the ingredient's role
+ * and whose thickness is its amount. `moments` are the attention points that
+ * bloom on the print. A side `timer` carries its own `adds` for the inner ring.
+ */
 export const recipes = [
   {
     id: "cacio-e-pepe",
@@ -9,9 +15,6 @@ export const recipes = [
       paper: "#f3ead6",
       ink: "#241c14",
       mute: "#8a7b68",
-      tomato: "#b42318",
-      olive: "#5a5a32",
-      gold: "#c9a15b",
       cream: "#fff6e4",
       soot: "#1b1611",
     },
@@ -20,6 +23,7 @@ export const recipes = [
       { name: "pecorino romano", grams: 90, role: "dairy" },
       { name: "black pepper", grams: 6, role: "spice" },
       { name: "pasta water", grams: 120, role: "liquid" },
+      { name: "water", grams: 3000, role: "liquid" },
       { name: "salt", grams: 18, role: "mineral" },
     ],
     steps: [
@@ -30,6 +34,7 @@ export const recipes = [
         durationSec: 6 * 60,
         kind: "prep",
         heatC: 100,
+        adds: ["water", "salt"],
       },
       {
         id: "pasta",
@@ -38,6 +43,8 @@ export const recipes = [
         durationSec: 9 * 60,
         kind: "cook",
         heatC: 98,
+        adds: ["tonnarelli"],
+        moments: [{ at: 7 * 60, note: "Taste. Keep a mug of the water." }],
       },
       {
         id: "emulsion",
@@ -46,6 +53,8 @@ export const recipes = [
         durationSec: 3 * 60,
         kind: "finish",
         heatC: 70,
+        adds: ["pecorino romano", "pasta water", "black pepper"],
+        moments: [{ at: 0, note: "Off the heat. Pepper, cheese, water.", big: true }],
       },
     ],
   },
@@ -59,9 +68,6 @@ export const recipes = [
       paper: "#efe2cf",
       ink: "#2a1812",
       mute: "#7d6554",
-      tomato: "#9c1f16",
-      olive: "#4a5528",
-      gold: "#b8893a",
       cream: "#f7e8d0",
       soot: "#1a100c",
     },
@@ -85,6 +91,7 @@ export const recipes = [
         durationSec: 15 * 60,
         kind: "prep",
         heatC: 140,
+        adds: ["olive oil", "onion", "carrot", "celery"],
       },
       {
         id: "brown",
@@ -93,6 +100,8 @@ export const recipes = [
         durationSec: 12 * 60,
         kind: "cook",
         heatC: 190,
+        adds: ["beef mince", "pork mince"],
+        moments: [{ at: 0, note: "Raise the heat. Do not stir yet.", big: true }],
       },
       {
         id: "wine-milk",
@@ -101,6 +110,8 @@ export const recipes = [
         durationSec: 20 * 60,
         kind: "cook",
         heatC: 120,
+        adds: ["red wine", "whole milk"],
+        moments: [{ at: 10 * 60, note: "Wine is a glaze. Milk in." }],
       },
       {
         id: "simmer",
@@ -109,6 +120,8 @@ export const recipes = [
         durationSec: 150 * 60,
         kind: "simmer",
         heatC: 95,
+        adds: ["tomato passata", "nutmeg"],
+        moments: [{ at: 0, note: "Tomato in. Lid ajar." }],
       },
       {
         id: "rest",
@@ -117,6 +130,7 @@ export const recipes = [
         durationSec: 10 * 60,
         kind: "rest",
         heatC: 60,
+        adds: [],
       },
     ],
   },
@@ -130,9 +144,6 @@ export const recipes = [
       paper: "#f0e4cc",
       ink: "#261910",
       mute: "#8b7358",
-      tomato: "#a33a1c",
-      olive: "#3f4a24",
-      gold: "#d2a24a",
       cream: "#fff3d8",
       soot: "#16110c",
     },
@@ -145,6 +156,7 @@ export const recipes = [
       { name: "thyme", grams: 4, role: "spice" },
       { name: "lemon", grams: 60, role: "acid" },
       { name: "butter", grams: 40, role: "dairy" },
+      { name: "salt", grams: 12, role: "mineral" },
     ],
     steps: [
       {
@@ -153,7 +165,8 @@ export const recipes = [
         body: "220 °C. Dry the skin. Salt under and over.",
         durationSec: 12 * 60,
         kind: "prep",
-        heatC: 20,
+        heatC: 220,
+        adds: ["salt"],
       },
       {
         id: "roast",
@@ -162,12 +175,18 @@ export const recipes = [
         durationSec: 50 * 60,
         kind: "cook",
         heatC: 220,
+        adds: ["whole chicken", "butter", "lemon", "thyme"],
+        moments: [
+          { at: 0, note: "Bird in, breast up.", big: true },
+          { at: 15 * 60, note: "Tray of vegetables in beside it." },
+        ],
         timers: [
           {
             id: "veg",
             label: "Tray of vegetables",
             durationSec: 35 * 60,
             offsetSec: 15 * 60,
+            adds: ["potatoes", "carrots", "red onion", "olive oil"],
           },
         ],
       },
@@ -178,6 +197,8 @@ export const recipes = [
         durationSec: 8 * 60,
         kind: "rest",
         heatC: 70,
+        adds: [],
+        moments: [{ at: 0, note: "Out. Rest under foil." }],
       },
     ],
   },
