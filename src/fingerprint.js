@@ -87,6 +87,15 @@ function weightedPick(rand, items, weightOf) {
   return items.at(-1);
 }
 
+// Seeded 1D noise over an angle: a few sines with random phases. Smooth, so
+// neighbouring strokes agree, and cheap enough to call per stroke.
+function angularNoise(rand, terms) {
+  const phases = terms.map(() => rand() * Math.PI * 2);
+  return (a) => terms.reduce((sum, [amp, k], i) => sum + amp * Math.sin(k * a + phases[i]), 0);
+}
+
+// A well pulls from afar and pushes back inside its core, so streamlines
+// bend toward a crack, wrap around it, and carry on.
 function fieldAt(x, y, wells, bend) {
   const r = Math.hypot(x, y) || 1;
   const a = Math.atan2(y, x);
@@ -99,8 +108,12 @@ function fieldAt(x, y, wells, bend) {
     const dx = well.x - x;
     const dy = well.y - y;
     const d2 = dx * dx + dy * dy + 0.02;
+    const d = Math.sqrt(d2);
+    const core = (well.core / d) ** 2;
     vx += (dx * well.mass) / d2 - (dy * well.swirl) / d2;
     vy += (dy * well.mass) / d2 + (dx * well.swirl) / d2;
+    vx += (-dx / d) * core * 0.8 - (dy / d) * core * 2 * Math.sign(well.swirl);
+    vy += (-dy / d) * core * 0.8 + (dx / d) * core * 2 * Math.sign(well.swirl);
   }
   const m = Math.hypot(vx, vy) || 1;
   return { vx: vx / m, vy: vy / m };
@@ -127,7 +140,11 @@ function energyOf(step) {
 function sweepStrokes(recipe, sectors, wells, bend, drama, rand) {
   const strokes = [];
   const bandWeight = Array.from({ length: BANDS }, () => 0.35 + rand() * 0.65);
+  const bandShift = Array.from({ length: BANDS }, () => (rand() - 0.5) * 0.04);
   const bandIndex = Array.from({ length: BANDS }, (_, i) => i);
+  const rim = angularNoise(rand, [[0.06, 2], [0.035, 5], [0.02, 9]]);
+  const stretch = angularNoise(rand, [[0.3, 2], [0.2, 6]]);
+  const shade = angularNoise(rand, [[0.25, 3], [0.15, 7]]);
   for (const sector of sectors) {
     const span = sector.a1 - sector.a0;
     const ring = sector.side ? SIDE_RING : RING;
@@ -135,12 +152,12 @@ function sweepStrokes(recipe, sectors, wells, bend, drama, rand) {
     const count = Math.round(lerp(390, 730, drama) * (span / (Math.PI * 2)) * (0.55 + energy * 0.65) * (sector.side ? 0.6 : 1));
     for (let i = 0; i < count; i += 1) {
       const band = weightedPick(rand, bandIndex, (b) => bandWeight[b]);
-      const radius = lerp(ring.inner, ring.outer, (band + rand() * 0.9) / BANDS);
       const angle = lerp(sector.a0, sector.a1, rand());
+      const radius = lerp(ring.inner, ring.outer, (band + rand() * 0.9) / BANDS + bandShift[band]) * (1 + rim(angle));
       const ingredient = weightedPick(rand, recipe.ingredients, (item) => item.grams);
       const tone = rand() < 0.62 ? sector.tone : ROLE_TONE[ingredient.role];
-      const length = lerp(0.6, 2.2, rand()) * radius * (0.6 + drama * 0.5);
-      const points = integrate(polar(angle, radius), wells, bend, length, { inner: 0.3, outer: 1 }, rand);
+      const length = lerp(0.6, 2.2, rand()) * radius * (0.6 + drama * 0.5) * (1 + stretch(angle));
+      const points = integrate(polar(angle, radius), wells, bend, length, { inner: 0.3, outer: 1.12 }, rand);
       if (points.length < 4) continue;
       const broad = rand() < 0.18;
       strokes.push({
@@ -148,9 +165,9 @@ function sweepStrokes(recipe, sectors, wells, bend, drama, rand) {
         points,
         tone,
         width: broad ? lerp(0.05, 0.085, rand()) : lerp(0.012, 0.05, rand()),
-        alpha: tone === "cream" ? 0.55 : broad ? lerp(0.22, 0.4, rand()) : lerp(0.32, 0.7, rand()),
+        alpha: clamp((tone === "cream" ? 0.55 : broad ? lerp(0.22, 0.4, rand()) : lerp(0.32, 0.7, rand())) * (1 + shade(angle)), 0.1, 0.9),
         bristles: broad ? 8 + Math.floor(rand() * 5) : 3 + Math.floor(rand() * 6),
-        dry: 0.3 + rand() * 0.2,
+        dry: 0.25 + rand() * 0.35,
         weight: energy,
       });
     }
@@ -284,6 +301,7 @@ export function buildFingerprint(recipe) {
       ...polar(a1 + (rand() - 0.5) * 0.08, lerp(0.55, 0.85, rand())),
       mass: strength * (0.006 + drama * 0.012),
       swirl: (rand() > 0.5 ? 1 : -1) * strength * (0.003 + drama * 0.008),
+      core: 0.04 + strength * 0.07,
       strength,
       tone: sectorTone(step),
     });
